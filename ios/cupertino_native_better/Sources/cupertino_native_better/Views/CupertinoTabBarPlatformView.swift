@@ -31,6 +31,12 @@ class CupertinoTabBarPlatformView: NSObject, FlutterPlatformView, UITabBarDelega
   private var currentIconSizes: [CGFloat] = [] // Track icon sizes for dynamic height calculation
   private var labelFontFamily: String? = nil
   private var labelFontSize: CGFloat = 0 // 0 means system default (~10pt)
+  // valyak: the item a refresh cycle restores. Set by setSelectedIndex and by
+  // user taps, so a cycle never restores an item it captured mid-cycle.
+  private var requestedItem: UITabBarItem?
+  // valyak: bumped by every refresh and every user tap; a cycle whose
+  // generation is stale stops, so two refreshes never interleave.
+  private var refreshGeneration: Int = 0
 
   init(frame: CGRect, viewId: Int64, args: Any?, messenger: FlutterBinaryMessenger) {
     self.channel = FlutterMethodChannel(name: "CupertinoNativeTabBar_\(viewId)", binaryMessenger: messenger)
@@ -841,6 +847,7 @@ channel.setMethodCallHandler { [weak self] call, result in
           // case below (line 938).
           // Single bar
           if let bar = self.tabBar, let items = bar.items, idx >= 0, idx < items.count {
+            self.requestedItem = items[idx]
             UIView.performWithoutAnimation { bar.selectedItem = items[idx] }
             result(nil)
             return
@@ -956,26 +963,34 @@ channel.setMethodCallHandler { [weak self] call, result in
         // so the iOS 26 Liquid Glass selection pill doesn't morph
         // visibly through every tab on launch (Issue #35).
         if let bar = self.tabBar, let items = bar.items, !items.isEmpty {
+          // valyak: the delegate stays attached (a programmatic selectedItem
+          // never calls didSelect, so taps during the cycle still reach Dart),
+          // a newer refresh or a tap ends this cycle, and the restore uses
+          // the index Dart last asked for, never a captured item.
           let originalSelected = bar.selectedItem
-          // Temporarily remove delegate to prevent callbacks during refresh
-          bar.delegate = nil
+          self.refreshGeneration += 1
+          let generation = self.refreshGeneration
           DispatchQueue.main.async { [weak self, weak bar, weak originalSelected] in
             guard let self = self, let bar = bar, let items = bar.items, !items.isEmpty else { return }
+            guard generation == self.refreshGeneration else { return }
             UIView.setAnimationsEnabled(false)
             // Cycle through each item to force label layout
             var index = 0
             func selectNext() {
+              guard generation == self.refreshGeneration else {
+                UIView.setAnimationsEnabled(true)
+                return
+              }
               guard index < items.count else {
-                // Restore original selection
-                if let original = originalSelected {
+                if let requested = self.requestedItem, items.contains(requested) {
+                  bar.selectedItem = requested
+                } else if let original = originalSelected {
                   bar.selectedItem = original
                 } else {
                   bar.selectedItem = items.first
                 }
                 bar.setNeedsLayout()
                 bar.layoutIfNeeded()
-                // Restore delegate + animations
-                bar.delegate = self
                 UIView.setAnimationsEnabled(true)
                 return
               }
@@ -1094,6 +1109,9 @@ channel.setMethodCallHandler { [weak self] call, result in
   func tabBar(_ tabBar: UITabBar, didSelect item: UITabBarItem) {
     // Single bar case
     if let single = self.tabBar, single === tabBar, let items = single.items, let idx = items.firstIndex(of: item) {
+      // valyak: a tap ends any refresh cycle and becomes the item to keep.
+      requestedItem = item
+      refreshGeneration += 1
       channel.invokeMethod("valueChanged", arguments: ["index": idx])
       return
     }
