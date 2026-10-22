@@ -583,6 +583,7 @@ channel.setMethodCallHandler { [weak self] call, result in
           } else if let bar = self.tabBar {
             bar.items = buildItems(0..<count)
             if let items = bar.items, selectedIndex >= 0, selectedIndex < items.count { bar.selectedItem = items[selectedIndex] }
+            self.requestedIndex = selectedIndex  // valyak: a later refresh restores this
             result(nil)
           } else {
             result(FlutterError(code: "state_error", message: "Tab bars not initialized", details: nil))
@@ -806,6 +807,7 @@ channel.setMethodCallHandler { [weak self] call, result in
             if let ap = appearance { if #available(iOS 13.0, *) { bar.standardAppearance = ap; if #available(iOS 15.0, *) { bar.scrollEdgeAppearance = ap } } }
             bar.items = buildItems(0..<count)
             if let items = bar.items, selectedIndex >= 0, selectedIndex < items.count { bar.selectedItem = items[selectedIndex] }
+            self.requestedIndex = selectedIndex  // valyak: a later refresh restores this
             self.container.addSubview(bar)
             let barTop = bar.topAnchor.constraint(equalTo: self.container.topAnchor, constant: 14)
             let barBottom = bar.bottomAnchor.constraint(equalTo: self.container.bottomAnchor)
