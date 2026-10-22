@@ -916,12 +916,11 @@ class _CNTabBarState extends State<CNTabBar> {
     // `UIView.setAnimationsEnabled(false)` so the Liquid Glass selection
     // pill doesn't morph between tabs while we cycle.
     //
-    // Order matters: setSelectedIndex must run BEFORE refresh on each
-    // pass. Refresh captures `bar.selectedItem` at start and restores
-    // it after cycling — if we ran setSelectedIndex AFTER refresh, that
-    // restore would override our intended index, leaving the bar stuck
-    // at the stale creationParams selectedIndex = 0 (see auto-hide-on-
-    // modal recreation flow).
+    // setSelectedIndex runs before refresh on each pass. Refresh restores
+    // the index last sent by setSelectedIndex (or tapped), never an item
+    // it captured, keeps the delegate attached so taps during the cycle
+    // reach Dart, and a newer refresh or a tap ends a running cycle
+    // (valyak fork: overlapping +50/+200 ms cycles left a stale tab lit).
     if (defaultTargetPlatform == TargetPlatform.iOS) {
       Future.delayed(const Duration(milliseconds: 50), () async {
         if (mounted && _channel != null) {

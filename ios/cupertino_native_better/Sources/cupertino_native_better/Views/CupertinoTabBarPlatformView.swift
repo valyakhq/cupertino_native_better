@@ -31,12 +31,16 @@ class CupertinoTabBarPlatformView: NSObject, FlutterPlatformView, UITabBarDelega
   private var currentIconSizes: [CGFloat] = [] // Track icon sizes for dynamic height calculation
   private var labelFontFamily: String? = nil
   private var labelFontSize: CGFloat = 0 // 0 means system default (~10pt)
-  // valyak: the item a refresh cycle restores. Set by setSelectedIndex and by
-  // user taps, so a cycle never restores an item it captured mid-cycle.
-  private var requestedItem: UITabBarItem?
+  // valyak: the index a refresh cycle restores. Set by setSelectedIndex and by
+  // user taps, so a cycle never restores an item it captured mid-cycle. An
+  // index, not an item: setItems replaces the items (an RTL flip does).
+  private var requestedIndex: Int?
   // valyak: bumped by every refresh and every user tap; a cycle whose
   // generation is stale stops, so two refreshes never interleave.
   private var refreshGeneration: Int = 0
+  // valyak: cycles that turned animations off; the last one out turns them
+  // back on, so a stopped cycle cannot re-enable them under a running one.
+  private var animationsOffCycles: Int = 0
 
   init(frame: CGRect, viewId: Int64, args: Any?, messenger: FlutterBinaryMessenger) {
     self.channel = FlutterMethodChannel(name: "CupertinoNativeTabBar_\(viewId)", binaryMessenger: messenger)
@@ -847,7 +851,7 @@ channel.setMethodCallHandler { [weak self] call, result in
           // case below (line 938).
           // Single bar
           if let bar = self.tabBar, let items = bar.items, idx >= 0, idx < items.count {
-            self.requestedItem = items[idx]
+            self.requestedIndex = idx
             UIView.performWithoutAnimation { bar.selectedItem = items[idx] }
             result(nil)
             return
@@ -973,17 +977,23 @@ channel.setMethodCallHandler { [weak self] call, result in
           DispatchQueue.main.async { [weak self, weak bar, weak originalSelected] in
             guard let self = self, let bar = bar, let items = bar.items, !items.isEmpty else { return }
             guard generation == self.refreshGeneration else { return }
+            self.animationsOffCycles += 1
             UIView.setAnimationsEnabled(false)
+            func finish() {
+              self.animationsOffCycles -= 1
+              if self.animationsOffCycles == 0 { UIView.setAnimationsEnabled(true) }
+            }
             // Cycle through each item to force label layout
             var index = 0
             func selectNext() {
-              guard generation == self.refreshGeneration else {
-                UIView.setAnimationsEnabled(true)
+              // A newer refresh, a tap or new items end this cycle.
+              guard generation == self.refreshGeneration, bar.items == items else {
+                finish()
                 return
               }
               guard index < items.count else {
-                if let requested = self.requestedItem, items.contains(requested) {
-                  bar.selectedItem = requested
+                if let requested = self.requestedIndex, requested >= 0, requested < items.count {
+                  bar.selectedItem = items[requested]
                 } else if let original = originalSelected {
                   bar.selectedItem = original
                 } else {
@@ -991,7 +1001,7 @@ channel.setMethodCallHandler { [weak self] call, result in
                 }
                 bar.setNeedsLayout()
                 bar.layoutIfNeeded()
-                UIView.setAnimationsEnabled(true)
+                finish()
                 return
               }
               bar.selectedItem = items[index]
@@ -1110,7 +1120,7 @@ channel.setMethodCallHandler { [weak self] call, result in
     // Single bar case
     if let single = self.tabBar, single === tabBar, let items = single.items, let idx = items.firstIndex(of: item) {
       // valyak: a tap ends any refresh cycle and becomes the item to keep.
-      requestedItem = item
+      requestedIndex = idx
       refreshGeneration += 1
       channel.invokeMethod("valueChanged", arguments: ["index": idx])
       return
